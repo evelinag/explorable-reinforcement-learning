@@ -1,4 +1,4 @@
-# Explorable reinforcement learnning
+# Explorable reinforcement learning
 
 **Work in progress**
 
