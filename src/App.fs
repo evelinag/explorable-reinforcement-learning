@@ -47,7 +47,9 @@ type Model = {
   Algorithm : ReinforcementLearningAlgorithm
   Task : ReinforcementLearningTask
   Grid : int []
+  InitialPosition : State
   Position : State
+  PathTaken : State list
   ActionValueTable : ActionValueTable
   TotalReward : float
   Steps : int
@@ -74,10 +76,11 @@ let init() =
       InitialState = initialState 
       TerminalState = (11, 0)
       ActionCount = actionCount
-      Cliff = [| for x in 1 .. 10 -> x, 0 |]
+      Cliff = [| for x in 1 .. 10 -> x, 0 |]  // This is for visualisation purposes - not part of the model
     }
     Grid = [||]
-    Position = (0,0)
+    InitialPosition = initialState
+    Position = initialState
     ActionValueTable = ActionValueTable()
     TotalReward = 0.
     Steps = 0
@@ -88,6 +91,7 @@ let init() =
       Alpha = 0.2
       Gamma = 0.7 }
     ShowGreedyPolicy = false
+    PathTaken = [initialState]
   }, Cmd.none
 
 
@@ -100,31 +104,38 @@ let update (msg:Msg) (model:Model) =
         model, Cmd.ofMsg NewEpisode 
       else
       
-      match model.Algorithm with
-      | Random ->
-        let action = rnd.Next(model.Task.ActionCount) // choose random action
-        let state', reward, finished = model.Task.Step model.Position action
-        { model with 
-            Finished = finished
-            Position = state'; 
-            TotalReward = model.TotalReward + reward
-            Steps = model.Steps + 1 }, Cmd.none
-      
-      | QLearning | Sarsa | SarsaLambda ->  
-        // epsilon-greedy step
-          let action =  // epsilon greedy policy
-            if rnd.NextDouble() < model.Parameters.Epsilon then
-                rnd.Next(model.Task.ActionCount) // choose random action
-            else
-                optimalPolicy rnd model.Task.ActionCount model.Position model.ActionValueTable
-          
+      let model', cmd = 
+        match model.Algorithm with
+        | Random ->
+          let action = rnd.Next(model.Task.ActionCount) // choose random action
           let state', reward, finished = model.Task.Step model.Position action
           { model with 
               Finished = finished
               Position = state'; 
               TotalReward = model.TotalReward + reward
-              Steps = model.Steps + 1 }, Cmd.none
+              Steps = model.Steps + 1;
+              PathTaken = state' :: model.PathTaken }, Cmd.none
+        
+        | QLearning | Sarsa | SarsaLambda ->  
+          // epsilon-greedy step
+            let action =  // epsilon greedy policy
+              if rnd.NextDouble() < model.Parameters.Epsilon then
+                  rnd.Next(model.Task.ActionCount) // choose random action
+              else
+                  optimalPolicy rnd model.Task.ActionCount model.Position model.ActionValueTable
+            
+            let state', reward, finished = model.Task.Step model.Position action
+            { model with 
+                Finished = finished
+                Position = state'; 
+                TotalReward = model.TotalReward + reward
+                Steps = model.Steps + 1
+                PathTaken = state' :: model.PathTaken }, Cmd.none
 
+      if model'.Position = model.InitialPosition then
+        { model' with PathTaken = [ model.InitialPosition] }, cmd
+      else
+        model', cmd  
 
   | ShowPolicy -> 
       { model with ShowGreedyPolicy = if model.ShowGreedyPolicy then false else true }, Cmd.none
@@ -161,10 +172,11 @@ let update (msg:Msg) (model:Model) =
 
   | NewEpisode ->
       { model with
-          Position = (0,0)
+          Position = model.InitialPosition
           TotalReward = 0.
           Steps = 0
           Finished = false
+          PathTaken = [ model.InitialPosition ]
       } , Cmd.none            
 
   | Reset -> init()
@@ -208,8 +220,8 @@ let viewArrow x y (direction: ActionGridWorld) =
   ] []
 
 let viewPosition x y colour = 
-  let r = float (cellSize - 5*cellSpacing)/2.
-  let r' = float (cellSize - cellSpacing)/2.
+  let r = float (cellSize - 5*cellSpacing)/2.  // radius of the point
+  let r' = float (cellSize - cellSpacing)/2.   // position offset of the centre
   
   let x' = float cellSize * float x + r'
   let y' = float (cellSize * (height - y - 1)) + r' 
@@ -237,6 +249,41 @@ let viewGreedyPolicyCell model x y =
   directions 
   |> List.map (viewArrow x y) 
 
+let viewPath pathHistory =  
+  let r' = float (cellSize - cellSpacing)/2.   // position offset of the centre
+  pathHistory
+  |> List.pairwise
+  |> List.collect (fun ((x1, y1), (x2, y2)) -> 
+    let x1' = float cellSize * float x1 + r'
+    let y1' = float (cellSize * (height - y1 - 1)) + r' 
+    let x2' = float cellSize * float x2 + r'
+    let y2' = float (cellSize * (height - y2 - 1)) + r' 
+    [
+      circle [ 
+        SVGAttr.Cx x1'
+        SVGAttr.Cy y1'
+        SVGAttr.R 1.
+        SVGAttr.Fill Colours.positionColour 
+        SVGAttr.Stroke Colours.positionColour
+      ] [ ]
+      circle [ 
+        SVGAttr.Cx x2'
+        SVGAttr.Cy y2'
+        SVGAttr.R 1.
+        SVGAttr.Fill Colours.positionColour 
+        SVGAttr.Stroke Colours.positionColour
+      ] [ ]
+      line [
+        X1 x1'
+        Y1 y1'
+        X2 x2'
+        Y2 y2'
+        SVGAttr.Stroke Colours.positionColour
+        SVGAttr.StrokeWidth 1
+      ] []
+    ]
+    )
+
 let viewGridWorld (model: Model) =
   svg [
     SVGAttr.Width (width * cellSize)
@@ -254,6 +301,8 @@ let viewGridWorld (model: Model) =
         for y in 0..height-1 do
           if ((x,y) <> model.Task.TerminalState) && (model.Task.Cliff |> Array.contains (x,y) |> not) then 
             yield! viewGreedyPolicyCell model x y       
+
+    yield! viewPath model.PathTaken
 
     let a,b = model.Position 
     yield viewPosition a b Colours.positionColour        
